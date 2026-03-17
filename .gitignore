@@ -1,0 +1,9 @@
+*.gbc
+*.gb
+*.map
+*.noi
+*.o
+*.asm
+*.lst
+*.sym
+*.ihx
