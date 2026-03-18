@@ -10,6 +10,54 @@
 
 extern const hUGESong_t game_music;
 
+/* Safe VBL wrapper — skip dosound if bank 2 is active */
+void safe_dosound(void) {
+    if (_current_bank == 1) hUGE_dosound();
+}
+
+/* RAM buffer for copying bank 2 data before passing to GBDK functions.
+   GBDK functions (set_bkg_data etc.) are in bank 1, so they CANNOT be
+   called while bank 2 is active. Must: switch to bank 2, memcpy to RAM,
+   switch back to bank 1, then call GBDK functions from RAM buffer. */
+uint8_t vram_buf[256]; /* reusable copy buffer */
+uint8_t font_map_copy[83];
+
+/* Copy N bytes from bank 2 ROM to RAM buffer, then load into VRAM */
+void load_tiles_from_bank2(const uint8_t *src, uint16_t count,
+                           uint8_t vram_idx, uint8_t is_sprite) {
+    uint16_t offset = 0;
+    while (offset < count) {
+        uint16_t chunk = count - offset;
+        uint16_t i;
+        if (chunk > 256) chunk = 256;
+        /* Copy chunk from bank 2 to RAM */
+        SWITCH_ROM(2);
+        for (i = 0; i < chunk; i++) vram_buf[i] = src[offset + i];
+        SWITCH_ROM(1);
+        /* Now call GBDK function from bank 1 */
+        if (is_sprite)
+            set_sprite_data(vram_idx + (uint8_t)(offset >> 4),
+                           (uint8_t)(chunk >> 4), vram_buf);
+        else
+            set_bkg_data(vram_idx + (uint8_t)(offset >> 4),
+                        (uint8_t)(chunk >> 4), vram_buf);
+        offset += chunk;
+    }
+}
+
+void load_font_from_bank2(void) {
+    /* font_tiles: font_TILE_COUNT tiles at font_TILE_ORIGIN */
+    load_tiles_from_bank2(font_tiles, font_TILE_COUNT * 16,
+                          font_TILE_ORIGIN, 0);
+}
+
+void copy_font_map(void) {
+    uint8_t i;
+    SWITCH_ROM(2);
+    for (i = 0; i < 83; i++) font_map_copy[i] = font_map[i];
+    SWITCH_ROM(1);
+}
+
 /* ============ SFX via direct register writes ============ */
 /* Uses CH1 (pulse+sweep) and CH4 (noise). Music channels muted during SFX,
    restored after sfx_frames expires. No banking needed — just register writes. */
@@ -1205,26 +1253,26 @@ void update_hud(void) {
     {
         uint8_t i;
         for (i = 0; i < 12; i++)
-            set_win_tile_xy(i, 0, font_map[0]);
+            set_win_tile_xy(i, 0, font_map_copy[0]);
     }
 
     if (!p_alive) {
         draw_win_text(4, 0, "RESPAWN ");
-        set_win_tile_xy(12, 0, font_map[16 + respawn_s]);
+        set_win_tile_xy(12, 0, font_map_copy[16 + respawn_s]);
     } else if (p_clip == 0) {
         draw_win_text(0, 0, "RELOAD");
     } else {
         draw_win_text(0, 0, wpn_names[p_weapon]);
         if (p_clip >= 10)
-            set_win_tile_xy(8, 0, font_map[16 + p_clip / 10]);
-        set_win_tile_xy(9, 0, font_map[16 + p_clip % 10]);
+            set_win_tile_xy(8, 0, font_map_copy[16 + p_clip / 10]);
+        set_win_tile_xy(9, 0, font_map_copy[16 + p_clip % 10]);
     }
 
     /* Scores (right side) — only update digits */
     draw_win_text(13, 0, "G:");
-    set_win_tile_xy(15, 0, font_map[16 + (scores >> 4)]);
+    set_win_tile_xy(15, 0, font_map_copy[16 + (scores >> 4)]);
     draw_win_text(17, 0, "D:");
-    set_win_tile_xy(19, 0, font_map[16 + (scores & 0x0F)]);
+    set_win_tile_xy(19, 0, font_map_copy[16 + (scores & 0x0F)]);
 }
 
 /* ============ TEXT RENDERING ============ */
@@ -1272,7 +1320,7 @@ void draw_text(uint8_t x, uint8_t y, const char *str) {
             set_bkg_tile_xy(x, y, 0);
             VBK_REG = VBK_TILES;
         } else {
-            set_bkg_tile_xy(x, y, font_map[char_to_font(*str)]);
+            set_bkg_tile_xy(x, y, font_map_copy[char_to_font(*str)]);
             VBK_REG = VBK_ATTRIBUTES;
             set_bkg_tile_xy(x, y, 7);
             VBK_REG = VBK_TILES;
@@ -1285,7 +1333,7 @@ void draw_text(uint8_t x, uint8_t y, const char *str) {
 /* Draw text on Window tilemap */
 void draw_win_text(uint8_t x, uint8_t y, const char *str) {
     while (*str) {
-        set_win_tile_xy(x, y, font_map[char_to_font(*str)]);
+        set_win_tile_xy(x, y, font_map_copy[char_to_font(*str)]);
         x++;
         str++;
     }
@@ -1328,7 +1376,7 @@ void run_menu(void) {
     DISPLAY_OFF;
 
     set_bkg_data(0, 2, bg_tiles);
-    set_bkg_data(font_TILE_ORIGIN, font_TILE_COUNT, font_tiles);
+    load_font_from_bank2();
     set_bkg_palette(0, 7, bg_palettes);
     set_bkg_palette(7, 1, font_bg_pal);
 
@@ -1382,7 +1430,7 @@ void run_credits(void) {
     DISPLAY_OFF;
 
     set_bkg_data(0, 2, bg_tiles);
-    set_bkg_data(font_TILE_ORIGIN, font_TILE_COUNT, font_tiles);
+    load_font_from_bank2();
     set_bkg_palette(0, 7, bg_palettes);
     set_bkg_palette(7, 1, font_bg_pal);
 
@@ -1426,7 +1474,7 @@ void run_victory(void) {
     DISPLAY_OFF;
 
     set_bkg_data(0, 2, bg_tiles);
-    set_bkg_data(font_TILE_ORIGIN, font_TILE_COUNT, font_tiles);
+    load_font_from_bank2();
     set_bkg_palette(0, 7, bg_palettes);
     set_bkg_palette(7, 1, font_bg_pal);
 
@@ -1443,12 +1491,12 @@ void run_victory(void) {
     {
         uint8_t gc = gamma_caps > 9 ? 9 : gamma_caps;
         uint8_t dc = delta_caps > 9 ? 9 : delta_caps;
-        set_bkg_tile_xy(7, 11, font_map[16 + gc]);
+        set_bkg_tile_xy(7, 11, font_map_copy[16 + gc]);
         VBK_REG = VBK_ATTRIBUTES;
         set_bkg_tile_xy(7, 11, 7);
         VBK_REG = VBK_TILES;
         draw_text(10, 11, "D:");
-        set_bkg_tile_xy(12, 11, font_map[16 + dc]);
+        set_bkg_tile_xy(12, 11, font_map_copy[16 + dc]);
         VBK_REG = VBK_ATTRIBUTES;
         set_bkg_tile_xy(12, 11, 7);
         VBK_REG = VBK_TILES;
@@ -1538,7 +1586,7 @@ void run_game(void) {
     DISPLAY_OFF;
 
     /* Show loading screen first (font tiles + text only) */
-    set_bkg_data(font_TILE_ORIGIN, font_TILE_COUNT, font_tiles);
+    load_font_from_bank2();
     set_bkg_palette(7, 1, font_bg_pal);
     set_bkg_palette(0, 1, bg_palettes); /* palette 0 for dark bg */
     clear_bg();
@@ -1599,7 +1647,7 @@ void run_game(void) {
     /* Window HUD */
     {
         uint8_t buf[20];
-        for (fi = 0; fi < 20; fi++) buf[fi] = font_map[0];
+        for (fi = 0; fi < 20; fi++) buf[fi] = font_map_copy[0];
         set_win_tiles(0, 0, 20, 1, buf);
     }
     set_win_text_attrs(0, 0, 20);
@@ -1917,8 +1965,10 @@ void main(void) {
 
     /* Simple music — VBL handler, no banking */
     __critical {
-        add_VBL(hUGE_dosound);
+        add_VBL(safe_dosound);
     }
+
+    copy_font_map();
 
     game_state = STATE_MENU;
 

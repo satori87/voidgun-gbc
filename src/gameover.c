@@ -1,4 +1,3 @@
-#pragma bank 2
 #include "hUGEDriver.h"
 #include <stddef.h>
 
@@ -299,4 +298,3 @@ static const unsigned char waves[] = {
 };
 
 const hUGESong_t gameover_music = {7, &order_cnt, order1, order2, order3,order4, duty_instruments, wave_instruments, noise_instruments, NULL, waves};
-BANKREF(gameover_music)

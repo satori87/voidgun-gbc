@@ -7,3 +7,6 @@
 *.lst
 *.sym
 *.ihx
+bgb.*
+*.bak
+notes.txt
