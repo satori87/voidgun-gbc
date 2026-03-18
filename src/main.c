@@ -10,6 +10,110 @@
 
 extern const hUGESong_t game_music;
 
+/* ============ SFX via direct register writes ============ */
+/* Uses CH1 (pulse+sweep) and CH4 (noise). Music channels muted during SFX,
+   restored after sfx_frames expires. No banking needed — just register writes. */
+
+uint8_t sfx_frames;      /* frames remaining for current SFX */
+uint8_t sfx_ch1_active;  /* CH1 used by current SFX */
+uint8_t sfx_ch4_active;  /* CH4 used by current SFX */
+
+void sfx_end(void) {
+    if (sfx_ch1_active) { hUGE_mute_channel(HT_CH1, HT_CH_PLAY); sfx_ch1_active = 0; }
+    if (sfx_ch4_active) { hUGE_mute_channel(HT_CH4, HT_CH_PLAY); sfx_ch4_active = 0; }
+    sfx_frames = 0;
+}
+
+void sfx_tick(void) {
+    if (sfx_frames > 0) {
+        sfx_frames--;
+        if (sfx_frames == 0) sfx_end();
+    }
+}
+
+/* --- Individual SFX --- */
+
+void sfx_laser(void) {  /* weapon fire — descending zap */
+    sfx_end();
+    hUGE_mute_channel(HT_CH1, HT_CH_MUTE);
+    sfx_ch1_active = 1;
+    NR10_REG = 0x79; /* sweep: time=7, descending, shift=1 */
+    NR11_REG = 0x80; /* duty 50% */
+    NR12_REG = 0xF3; /* vol 15, decrease step 3 */
+    NR13_REG = 0x80; /* freq mid */
+    NR14_REG = 0x86; /* trigger, freq high bits=6 */
+    sfx_frames = 8;
+}
+
+void sfx_hit(void) {  /* ship takes damage — punchy noise burst */
+    sfx_end();
+    hUGE_mute_channel(HT_CH4, HT_CH_MUTE);
+    sfx_ch4_active = 1;
+    NR41_REG = 0x00; /* length unused */
+    NR42_REG = 0xF1; /* vol 15, decrease step 1 (fast) */
+    NR43_REG = 0x51; /* clock shift=5, 7-bit mode, div=1 — crunchy */
+    NR44_REG = 0xC0; /* trigger + length enable */
+    sfx_frames = 10;
+}
+
+void sfx_explode(void) {  /* ship destroyed — long rumble */
+    sfx_end();
+    hUGE_mute_channel(HT_CH4, HT_CH_MUTE);
+    sfx_ch4_active = 1;
+    NR41_REG = 0x00;
+    NR42_REG = 0xF2; /* vol 15, decrease step 2 */
+    NR43_REG = 0x40; /* clock shift=4, 15-bit, div=0 — deep boom */
+    NR44_REG = 0x80; /* trigger */
+    sfx_frames = 20;
+}
+
+void sfx_grab(void) {  /* flag grabbed — quick 3-note ascending */
+    sfx_end();
+    hUGE_mute_channel(HT_CH1, HT_CH_MUTE);
+    sfx_ch1_active = 1;
+    NR10_REG = 0x12; /* sweep: time=1, ascending, shift=2 */
+    NR11_REG = 0x40; /* duty 25% — brighter tone */
+    NR12_REG = 0xF0; /* vol 15, NO decay */
+    NR13_REG = 0xC0; /* freq mid-high */
+    NR14_REG = 0x85; /* trigger, freq high bits */
+    sfx_frames = 15;
+}
+
+void sfx_capture(void) {  /* flag captured — triumphant slow rise */
+    sfx_end();
+    hUGE_mute_channel(HT_CH1, HT_CH_MUTE);
+    sfx_ch1_active = 1;
+    NR10_REG = 0x21; /* sweep: time=2, ascending, shift=1 (slow rise) */
+    NR11_REG = 0x80; /* duty 50% */
+    NR12_REG = 0xF0; /* vol 15, NO decay */
+    NR13_REG = 0x00; /* start freq low */
+    NR14_REG = 0x84; /* trigger, freq high=4 */
+    sfx_frames = 40;
+}
+
+void sfx_drop(void) {  /* flag dropped — sad descending tone */
+    sfx_end();
+    hUGE_mute_channel(HT_CH1, HT_CH_MUTE);
+    sfx_ch1_active = 1;
+    NR10_REG = 0x6A; /* sweep: time=6, descending, shift=2 */
+    NR11_REG = 0xC0; /* duty 75% — hollow tone */
+    NR12_REG = 0xF0; /* vol 15, NO decay */
+    NR13_REG = 0x00; /* freq */
+    NR14_REG = 0x87; /* trigger, start high */
+    sfx_frames = 25;
+}
+
+void sfx_ui(void) {  /* menu select — short high blip */
+    sfx_end();
+    hUGE_mute_channel(HT_CH1, HT_CH_MUTE);
+    sfx_ch1_active = 1;
+    NR10_REG = 0x00; /* no sweep */
+    NR11_REG = 0x80; /* duty 50% */
+    NR12_REG = 0xA1; /* vol 10, decrease step 1 */
+    NR13_REG = 0x80; /* freq */
+    NR14_REG = 0x87; /* trigger, high freq */
+    sfx_frames = 4;
+}
 
 /* Forward declarations */
 void fire_bullet(uint16_t px, uint16_t py, uint8_t dir, uint8_t weapon, uint8_t team);
@@ -590,6 +694,7 @@ void bot_flag_logic(uint8_t bi) {
             flags[ef].carrier_idx = bi;
             b->carrying_flag = ef;
             b->decide_timer = 0;
+            sfx_grab();
         }
     }
 
@@ -617,8 +722,8 @@ void bot_flag_logic(uint8_t bi) {
             flags[b->carrying_flag].y = flags[b->carrying_flag].home_y;
             b->carrying_flag = -1;
             /* Score the capture for the bot's team */
-            if (b->team == 0) { gamma_caps++;  }
-            else { delta_caps++;  }
+            if (b->team == 0) { gamma_caps++; sfx_capture(); }
+            else { delta_caps++; sfx_capture(); }
         }
     }
 }
@@ -952,10 +1057,23 @@ void update_bullets(void) {
         by = bullets[i].y;
 
         /* Despawn if expired or hit wall */
-        if (bullets[i].life == 0 ||
-            is_wall_fast((uint8_t)(bx >> 3), (uint8_t)(by >> 3))) {
+        if (bullets[i].life == 0) {
             bullets[i].active = 0;
             continue;
+        }
+        {
+            uint8_t wtx = (uint8_t)(bx >> 3);
+            uint8_t wty = (uint8_t)(by >> 3);
+            if (is_wall_fast(wtx, wty)) {
+                /* Change wall color */
+                bounce_pal++;
+                if (bounce_pal > NUM_WALL_PALS) bounce_pal = 1;
+                VBK_REG = VBK_ATTRIBUTES;
+                set_bkg_tile_xy(wtx & 31, wty & 31, bounce_pal);
+                VBK_REG = VBK_TILES;
+                bullets[i].active = 0;
+                continue;
+            }
         }
 
         /* Hit player? (bullets from other team) */
@@ -969,15 +1087,18 @@ void update_bullets(void) {
                 if (p_hp <= dmg) {
                     p_hp = 0; p_alive = 0;
                     p_respawn_timer = RESPAWN_FRAMES;
+                    sfx_explode();
                     p_deaths++;
                     /* Drop carried flag */
                     if (flags[1].carrier_type == 0) {
                         flags[1].state = FLAG_DROPPED;
                         flags[1].carrier_type = -1;
                         flags[1].drop_timer = 0;
+                        sfx_drop();
                     }
                 } else {
                     p_hp -= dmg;
+                    sfx_hit();
                 }
                 bullets[i].active = 0;
                 continue;
@@ -995,6 +1116,7 @@ void update_bullets(void) {
                 if (bots[bi].hp <= dmg) {
                     bots[bi].hp = 0;
                     bots[bi].alive = 0;
+                    sfx_explode();
                     bots[bi].respawn_timer = RESPAWN_FRAMES;
                     bots[bi].vx = 0; bots[bi].vy = 0;
                     /* Drop carried flag */
@@ -1004,7 +1126,7 @@ void update_bullets(void) {
                         flags[fi].carrier_type = -1;
                         flags[fi].drop_timer = 0;
                         bots[bi].carrying_flag = -1;
-                        /* SFX: which team's flag was dropped? */
+                        sfx_drop();
                     }
                     /* Kill — no score, only captures count */
                 } else {
@@ -1221,11 +1343,10 @@ void run_menu(void) {
     SHOW_BKG;
     HIDE_SPRITES;
     DISPLAY_ON;
+    NR51_REG = 0xFF; /* unmute */
     if (!menu_music_playing) {
         hUGE_init(&game_music);
         menu_music_playing = 1;
-    } else {
-        NR51_REG = 0xFF;
     }
 
     while (1) {
@@ -1243,8 +1364,8 @@ void run_menu(void) {
             draw_text(5, 12, "  CREDITS");
         }
         if ((keys & (J_A | J_START)) && !(old_keys & (J_A | J_START))) {
-            
-            if (!selected) menu_music_playing = 0; /* will restart on return */
+            sfx_ui();
+            if (!selected) menu_music_playing = 0;
             game_state = selected ? STATE_CREDITS : STATE_GAME;
             return;
         }
@@ -1286,7 +1407,7 @@ void run_credits(void) {
         vsync();
         keys = joypad();
         if ((keys & J_B) && !(old_keys & J_B)) {
-            
+            sfx_ui();
             game_state = STATE_MENU;
             return;
         }
@@ -1338,17 +1459,15 @@ void run_victory(void) {
     SHOW_BKG;
     HIDE_SPRITES;
     DISPLAY_ON;
-    if (winning_team == 0)
-        hUGE_init(&game_music);
-    else
-        hUGE_init(&game_music);
+    NR51_REG = 0xFF;
+    hUGE_init(&game_music);
 
     while (1) {
         vsync();
         keys = joypad();
         if ((keys & (J_A | J_START)) && !(old_keys & (J_A | J_START))) {
-            
-            menu_music_playing = 0; /* restart menu music */
+            sfx_ui();
+            menu_music_playing = 0;
             game_state = STATE_MENU;
             return;
         }
@@ -1492,7 +1611,8 @@ void run_game(void) {
     SHOW_SPRITES;
     SHOW_WIN;
 
-    /* Restore audio and restart music with VBL handler */
+    /* Restore audio and restart music */
+    NR51_REG = 0xFF;
     hUGE_init(&game_music);
 
     DISPLAY_ON;
@@ -1539,7 +1659,22 @@ void run_game(void) {
         if ((keys & J_A) && p_fire_timer == 0 && p_clip > 0) {
             pcx = (uint16_t)(ship_x >> 8) + 4;
             pcy = (uint16_t)(ship_y >> 8) + 4;
-            fire_bullet(pcx, pcy, ship_dir, p_weapon, 0);
+            {
+                /* Bullet spawn offset per direction */
+                int8_t box = 0, boy = 0;
+                switch (ship_dir) {
+                    case 0: box = -3; break;           /* UP */
+                    case 1: box = -3; boy = 1; break;  /* UP-RIGHT */
+                    case 2: boy = -2; break;           /* RIGHT */
+                    case 3: boy = -1; break;           /* DOWN-RIGHT */
+                    case 4: box = -3; break;           /* DOWN */
+                    case 5: box = -2; break;           /* DOWN-LEFT */
+                    case 6: boy = -3; break;           /* LEFT */
+                    case 7: break;                     /* UP-LEFT */
+                }
+                fire_bullet(pcx + box, pcy + boy, ship_dir, p_weapon, 0);
+            }
+            sfx_laser();
             p_clip--;
             p_fire_timer = wpn_rate[p_weapon];
             if (p_clip == 0) p_reload_timer = wpn_reload[p_weapon];
@@ -1597,6 +1732,7 @@ void run_game(void) {
                 flags[1].state = FLAG_CARRIED;
                 flags[1].carrier_type = 0;
                 flags[1].carrier_idx = 0;
+                sfx_grab();
             }
         }
 
@@ -1623,6 +1759,7 @@ void run_game(void) {
                 flags[1].y = flags[1].home_y;
                 flags[1].carrier_type = -1;
                 gamma_caps++;
+                sfx_capture();
             }
         }
 
@@ -1750,7 +1887,8 @@ skip_player:
 
         /* ---- SFX timer: restart music when SFX jingle finishes ---- */
 
-        /* ---- Update HUD ---- */
+        /* ---- SFX tick + Update HUD ---- */
+        sfx_tick();
         update_hud();
 
         old_keys = keys;
